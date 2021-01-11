@@ -7,3 +7,4 @@ matplotlib>=1.4.3
 pandas>=0.19
 pyvi==0.1
 flask-cors
+gunicorn

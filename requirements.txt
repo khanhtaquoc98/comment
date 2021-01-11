@@ -1,0 +1,9 @@
+ipython[all]>=3.6.0
+flask==1.1.2
+numpy>=1.9.2
+scipy>=0.15.1
+scikit-learn>=0.24.0
+matplotlib>=1.4.3
+pandas>=0.19
+pyvi==0.1
+flask-cors

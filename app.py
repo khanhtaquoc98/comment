@@ -11,6 +11,7 @@ from pyvi import ViTokenizer
 import re
 import string
 import codecs
+import joblib
 
 from flask import Flask, request
 from flask import jsonify
@@ -21,81 +22,23 @@ from flask_cors import CORS, cross_origin
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-
-class DataSource(object):
-    def _load_raw_data(self, filename, is_train=True):
-        a = []
-        b = []
-
-        regex = 'train_'
-        if not is_train:
-            regex = 'test_'
-
-        with open(filename,  encoding="utf8") as file:
-            for line in file:
-                if regex in line:
-                    b.append(a)
-                    a = [line]
-                elif line != '\n':
-                    a.append(line)
-        b.append(a)
-
-        return b[1:]
-
-    def _create_row(self, sample, is_train=True):
-
-        d = {}
-        d['id'] = sample[0].replace('\n', '')
-        review = ""
-
-        if is_train:
-            for clause in sample[1:-1]:
-                review += clause.replace('\n', ' ')
-                review = review.replace('.', ' ')
-
-            d['label'] = int(sample[-1].replace('\n', ' '))
-        else:
-            for clause in sample[1:]:
-                review += clause.replace('\n', ' ')
-                review = review.replace('.', ' ')
-
-
-        d['review'] = review
-
-        return d
-
-    def load_data(self, filename, is_train=True):
-
-        raw_data = self._load_raw_data(filename, is_train)
-        lst = []
-
-        for row in raw_data:
-            lst.append(self._create_row(row, is_train))
-
-        return lst
-
-    def transform_to_dataset(self, x_set,y_set):
-        X, y = [], []
-        for document, topic in zip(list(x_set), list(y_set)):
-            document = normalize_text(document)
-            X.append(document.strip())
-            y.append(topic)
-            #Augmentation bằng cách remove dấu tiếng Việt
-            X.append(no_marks(document))
-            y.append(topic)
-        return X, y
-
-def no_marks(s):
-    __INTAB = [ch for ch in VN_CHARS]
-    __OUTTAB = "a"*17 + "o"*17 + "e"*11 + "u"*11 + "i"*5 + "y"*5 + "d"*2
-    __OUTTAB += "A"*17 + "O"*17 + "E"*11 + "U"*11 + "I"*5 + "Y"*5 + "D"*2
-    __r = re.compile("|".join(__INTAB))
-    __replaces_dict = dict(zip(__INTAB, __OUTTAB))
-    result = __r.sub(lambda m: __replaces_dict[m.group(0)], s)
-    return result
-
 def normalize_text(text):
-   
+
+    #Từ điển tích cực, tiêu cực, phủ định
+    path_nag = 'sentiment_dicts/nag.txt'
+    path_pos = 'sentiment_dicts/pos.txt'
+    path_not = 'sentiment_dicts/not.txt'
+
+    with codecs.open(path_nag, 'r',  encoding="utf8") as f:
+        nag = f.readlines()
+    nag_list = [n.replace('\n', '') for n in nag]
+
+    with codecs.open(path_pos, 'r',  encoding="utf8") as f:
+        pos = f.readlines()
+    pos_list = [n.replace('\n', '') for n in pos]
+    with codecs.open(path_not, 'r',  encoding="utf8") as f:
+        not_ = f.readlines()
+    not_list = [n.replace('\n', '') for n in not_]
 
     #Remove các ký tự kéo dài: vd: đẹppppppp
     text = re.sub(r'([A-Z])\1+', lambda m: m.group(1).upper(), text, flags=re.IGNORECASE)
@@ -163,7 +106,7 @@ def normalize_text(text):
         '6 sao': ' 5star ','6 star': ' 5star ', '5star': ' 5star ','5 sao': ' 5star ','5sao': ' 5star ',
         'starstarstarstarstar': ' 5star ', '1 sao': ' 1star ', '1sao': ' 1star ','2 sao':' 1star ','2sao':' 1star ',
         '2 starstar':' 1star ','1star': ' 1star ', '0 sao': ' 1star ', '0star': ' 1star ',}
-        
+
     for k, v in replace_list.items():
         text = text.replace(k, v)
 
@@ -203,95 +146,9 @@ def normalize_text(text):
     text = text.replace('🏻','')
     return text
 
-def TrainDataSentiment():
-    ds = DataSource()
-    train_data = pd.DataFrame(ds.load_data('data_clean/train.crash'))
-    new_data = []
-
-    #Thêm mẫu bằng cách lấy trong từ điển Sentiment (nag/pos)
-    for index,row in enumerate(nag_list):
-        new_data.append(['pos'+str(index),'0',row])
-    for index,row in enumerate(nag_list):
-        new_data.append(['nag'+str(index),'1',row])
-
-    new_data = pd.DataFrame(new_data,columns=list(['id','label','review']))
-    train_data.append(new_data)
-    #test_data = pd.DataFrame(ds.load_data('data_clean/test.crash', is_train=False))
-    #Try some models
-    classifiers = [
-                # MultinomialNB(),
-                # DecisionTreeClassifier(),
-                # LogisticRegression(),
-                # SGDClassifier(),
-                LinearSVC(fit_intercept = True,multi_class='crammer_singer', C=1),
-            ]
-
-    X_train, X_test, y_train, y_test = train_test_split(train_data.review, train_data.label, test_size=0.3,random_state=42)
-    X_train, y_train = ds.transform_to_dataset(X_train,y_train)
-    X_test, y_test = ds.transform_to_dataset(X_test, y_test)
-
-    #THÊM STOPWORD LÀ NHỮNG TỪ KÉM QUAN TRỌNG
-    stop_ws = (u'rằng',u'thì',u'là',u'mà')
-
-    for classifier in classifiers:
-        steps = []
-        steps.append(('CountVectorizer', CountVectorizer(ngram_range=(1,5),stop_words=stop_ws,max_df=0.5, min_df=5)))
-        steps.append(('tfidf', TfidfTransformer(use_idf=False, sublinear_tf = True,norm='l2',smooth_idf=True)))
-        steps.append(('classifier', classifier))
-        clf = Pipeline(steps)
-        clf.fit(X_train, y_train)
-        y_pred = clf.predict(X_test)
-        report1 = metrics.classification_report(y_test, y_pred, labels=[1,0], digits=3)
-
-    X_train, y_train = ds.transform_to_dataset(train_data.review, train_data.label)
-
-
-    #TRAIN OVERFITTING/ERRO ANALYSIS
-    clf.fit(X_train, y_train)
-    y_pred = clf.predict(X_train)
-    report2 = metrics.classification_report(y_train, y_pred, labels=[1,0], digits=3)
-
-    #ERRO ANALYSIS
-    for id,x, y1, y2 in zip(train_data.id, X_train, y_train, y_pred):
-        if y1 != y2:
-            #CHECK EACH WRONG SAMPLE POSSITIVE/NAGATIVE
-           #if y1!=1:#0:
-               print(id,x, y1, y2)
-
-    #CROSS VALIDATION
-    cross_score = cross_val_score(clf, X_train,y_train, cv=5)
-
-    #REPORT
-    print('DATASET LEN %d'%(len(X_train)))
-    print('TRAIN 70/30 \n\n',report1)
-    print('TRAIN OVERFITING\n\n',report2)
-    #print("CROSSVALIDATION 5 FOLDS: %0.4f (+/- %0.4f)" % (cross_score.mean(), cross_score.std() * 2))
-
-    return clf
 
 @app.route('/')
 def index():
-    path_nag = 'sentiment_dicts/nag.txt'
-    path_pos = 'sentiment_dicts/pos.txt'
-    path_not = 'sentiment_dicts/not.txt'
-
-    VN_CHARS_LOWER = u'ạảãàáâậầấẩẫăắằặẳẵóòọõỏôộổỗồốơờớợởỡéèẻẹẽêếềệểễúùụủũưựữửừứíìịỉĩýỳỷỵỹđð'
-    VN_CHARS_UPPER = u'ẠẢÃÀÁÂẬẦẤẨẪĂẮẰẶẲẴÓÒỌÕỎÔỘỔỖỒỐƠỜỚỢỞỠÉÈẺẸẼÊẾỀỆỂỄÚÙỤỦŨƯỰỮỬỪỨÍÌỊỈĨÝỲỶỴỸÐĐ'
-    VN_CHARS = VN_CHARS_LOWER + VN_CHARS_UPPER
-
-    
-    with codecs.open(path_nag, 'r',  encoding="utf8") as f:
-        nag = f.readlines()
-    nag_list = [n.replace('\n', '') for n in nag]
-
-    with codecs.open(path_pos, 'r',  encoding="utf8") as f:
-        pos = f.readlines()
-    pos_list = [n.replace('\n', '') for n in pos]
-
-    with codecs.open(path_not, 'r',  encoding="utf8") as f:
-        not_ = f.readlines()
-    not_list = [n.replace('\n', '') for n in not_]
-    clfSentiment = TrainDataSentiment()
      return "<h1>Connect</h1>"
 
 @app.route('/sentcomment', methods=['POST'])
@@ -304,6 +161,8 @@ def sentcomment():
             text =  request.json['text']
             document = normalize_text(text)
             test_list.append(document)
+
+            clfSentiment = joblib.load('filename.pkl')
             y_predict = clfSentiment.predict(test_list)
 
             return {
@@ -314,7 +173,7 @@ def sentcomment():
        
 if __name__ == '__main__':
     app.debug = True
-   
+
     app.run()
     
  

@@ -8,3 +8,4 @@ pandas>=0.19
 pyvi==0.1
 flask-cors
 gunicorn
+joblib
